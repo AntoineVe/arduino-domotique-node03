@@ -35,34 +35,41 @@ int AMP_CH_SIG = A0;
 int AMP_CH_VCC = 8;
 int AMP_CH_GND = 9;
 
-int ACS712(int pin, int amp) {
-  int mVperAmp;
-  // Cf datasheet pour mVperAmp
-  if (amp == 20) {
-    mVperAmp = 100;
-  } else if (amp == 5) {
-    mVperAmp = 185;
-  }
-  // Recherche les pics // et calcul de l'offset
-  long offset = 0;
-  int reading = 0;
-  int reading_max = 0;
-  for(int i = 0; i < 5000; i++) {
-    reading = analogRead(pin);
-    offset += reading;
-    if (reading >= reading_max) {
-      reading_max = reading;
-    }
+float ACS712(int pin, int amp) {
+  float coef;
+  long VQ = 0;
+  for (int i=0; i<2500; i++) {
+    VQ += analogRead(pin);
     delay(1);
   }
-  offset /= 1024;
-  // Calcul de la puissance (P=UI)
-  // courant alternatif donc utilise la crete
-  float max_sensor = (reading_max / 1024.00) * 5000;
-  float amps = (max_sensor - offset) / mVperAmp;
-  // etrangement, il y a un surplus moyen mesure de 0.365 A
-  int watts = round((amps - 0.365) * 230.000);
-  return watts;
+  VQ /= 2500;
+  const unsigned long sampleTime = 100000UL;                           // sample over 100ms, it is an exact number of cycles for both 50Hz and 60Hz mains
+  const unsigned long numSamples = 250UL;                               // choose the number of samples to divide sampleTime exactly, but low enough for the ADC to keep up
+  const unsigned long sampleInterval = sampleTime/numSamples;  // the sampling interval, must be longer than then ADC conversion time
+//  const int adc_zero = 524;
+  const int adc_zero = VQ;
+  unsigned long currentAcc = 0;
+  unsigned int count = 0;
+  unsigned long prevMicros = micros() - sampleInterval ;
+  while (count < numSamples)
+  {
+    if (micros() - prevMicros >= sampleInterval)
+    {
+      long adc_raw = analogRead(pin) - adc_zero;
+      currentAcc += (unsigned long)(adc_raw * adc_raw);
+      ++count;
+      prevMicros += sampleInterval;
+    }
+  }
+  if (amp == 20) {
+    coef = 5000.00 / 100.00;
+  } else if (amp == 5) {
+    coef = 5000.00 / 185.00;
+  } else if (amp == 30) {
+    coef = 5000.00 / 66.00;
+  }
+  float rms = sqrt((float)currentAcc/(float)numSamples) * (coef / 1024.0);
+  return rms;
 }
 
 void setup() {
@@ -162,7 +169,7 @@ void loop() {
           client.println("<node>");
           client.println("\t<name>Chauffage chambre 1</name>");
           client.println("\t<sensor>");
-          client.println("\t\t<name>Watts</name>");
+          client.println("\t\t<name>Amperes</name>");
           client.print("\t\t<value>");
           client.print(ACS712(AMP_CH_SIG, 5));;
           client.println("</value>");
