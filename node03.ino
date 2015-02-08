@@ -34,50 +34,35 @@ int RELAIS_GND = 7;
 int AMP_CH_SIG = A0;
 int AMP_CH_VCC = 8;
 int AMP_CH_GND = 9;
-int OFFSET_CHAUFF = 2494;
 
-// Calcul de la consommation avec les ACS712 (5A ou 20A)
-int adc_zero;   //autoadjusted relative digital zero
-const unsigned long sampleTime = 100000UL;                           // sample over 100ms, it is an exact number of cycles for both 50Hz and 60Hz mains
-const unsigned long numSamples = 250UL;                               // choose the number of samples to divide sampleTime exactly, but low enough for the ADC to keep up
-const unsigned long sampleInterval = sampleTime/numSamples;  // the sampling interval, must be longer than then ADC conversion time
-float readCurrent(int PIN, int AMP)
-{
-  float COEF;
-  unsigned long currentAcc = 0;
-  unsigned int count = 0;
-  unsigned long prevMicros = micros() - sampleInterval ;
-  while (count < numSamples)
-  {
-    if (micros() - prevMicros >= sampleInterval)
-    {
-      int adc_raw = analogRead(PIN) - adc_zero;
-      currentAcc += (unsigned long)(adc_raw * adc_raw);
-      ++count;
-      prevMicros += sampleInterval;
+int ACS712(int pin, int amp) {
+  int mVperAmp;
+  // Cf datasheet pour mVperAmp
+  if (amp == 20) {
+    mVperAmp = 100;
+  } else if (amp == 5) {
+    mVperAmp = 185;
+  }
+  // Recherche les pics // et calcul de l'offset
+  long offset = 0;
+  int reading = 0;
+  int reading_max = 0;
+  for(int i = 0; i < 5000; i++) {
+    reading = analogRead(pin);
+    offset += reading;
+    if (reading >= reading_max) {
+      reading_max = reading;
     }
+    delay(1);
   }
-  if (AMP == 20) {
-    COEF = 50.00;
-  }
-  else if (AMP == 5) {
-    COEF = 27.027;
-  }
-  float rms = sqrt((float)currentAcc/(float)numSamples) * (COEF / 1024.0);
-  return rms;
-}
-int determineVQ(int PIN) {
-  Serial.print("estimating avg. quiscent voltage:");
-  long VQ = 0;
-  //read 5000 samples to stabilise value
-  for (int i=0; i<5000; i++) {
-    VQ += analogRead(PIN);
-    delay(1);//depends on sampling (on filter capacitor), can be 1/80000 (80kHz) max.
-  }
-  VQ /= 5000;
-  Serial.print(map(VQ, 0, 1023, 0, 5000));
-  Serial.println(" mV");
-  return int(VQ);
+  offset /= 1024;
+  // Calcul de la puissance (P=UI)
+  // courant alternatif donc utilise la crete
+  float max_sensor = (reading_max / 1024.00) * 5000;
+  float amps = (max_sensor - offset) / mVperAmp;
+  // etrangement, il y a un surplus moyen mesure de 0.365 A
+  int watts = round((amps - 0.365) * 230.000);
+  return watts;
 }
 
 void setup() {
@@ -98,7 +83,6 @@ void setup() {
   pinMode(AMP_CH_GND, OUTPUT);
   digitalWrite(AMP_CH_VCC, HIGH);
   digitalWrite(AMP_CH_GND, LOW);
-  adc_zero = determineVQ(AMP_CH_SIG);
   Ethernet.begin(mac, ip);
   server.begin();
   Serial.begin(9600);
@@ -155,6 +139,7 @@ void loop() {
           client.println("Content-Type: text/xml");
           client.println();
           client.println("<?xml version=\"1.0\"?>");
+          client.println("<root>");
           // Chambre 1
           client.println("<node>");
           client.println("\t<name>Chambre 1</name>");
@@ -179,11 +164,12 @@ void loop() {
           client.println("\t<sensor>");
           client.println("\t\t<name>Watts</name>");
           client.print("\t\t<value>");
-          client.print(readCurrent(AMP_CH_SIG, 5));
+          client.print(ACS712(AMP_CH_SIG, 5));;
           client.println("</value>");
           client.println("\t\t<type>ACS712-05B</type>");
           client.println("\t</sensor>");
           client.println("</node>");
+          client.println("</root>");
           break;
         }
         if (c == '\n') {
